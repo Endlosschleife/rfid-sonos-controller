@@ -1,27 +1,84 @@
-#include <Arduino.h>
+#include <FS.h>
+#include <SPIFFS.h>
 #include <WiFiManager.h>
-#include <SPI.h>
-#include <MFRC522.h>
-
-#define SS_PIN 5
-#define RST_PIN 0
+#include <Arduino.h>
+#include <PubSubClient.h>
+#include <Rfid.h>
+#include <ArduinoJson.h>
+#include <stdlib.h>     /* strtol */
 
 char mqtt_server[40];
-char mqtt_port[6] = "8080";
-char mqtt_topic[34] = "topic";
+char mqtt_port[6] = "1883";
+char mqtt_topic[34] = "sonos-controller/sonos";
 
-MFRC522::MIFARE_Key key;
-MFRC522 rfid = MFRC522(SS_PIN, RST_PIN);
-byte nuidPICC[4] = {0, 0, 0, 0};
+WiFiClient espClient;
+PubSubClient client(espClient);
+#define MSG_BUFFER_SIZE (200)
+char msg[MSG_BUFFER_SIZE];
+boolean shouldSaveConfig = false;
+
+Rfid rfid;
+
+// callback notifying us of the need to save config
+void saveConfigCallback()
+{
+  Serial.println("Should save config");
+  shouldSaveConfig = true;
+}
 
 void setupWifi()
 {
   Serial.println("Setup Wifi");
+
+  // restore config
+  if (SPIFFS.begin(true))
+  {
+    Serial.println("mounted file system");
+    if (SPIFFS.exists("/config.json"))
+    {
+      // file exists, reading and loading
+      Serial.println("reading config file");
+      File configFile = SPIFFS.open("/config.json", "r");
+      if (configFile)
+      {
+        Serial.println("opened config file");
+        size_t size = configFile.size();
+        // Allocate a buffer to store contents of the file.
+        std::unique_ptr<char[]> buf(new char[size]);
+
+        configFile.readBytes(buf.get(), size);
+
+        DynamicJsonDocument json(1024);
+        auto deserializeError = deserializeJson(json, buf.get());
+        serializeJson(json, Serial);
+        if (!deserializeError)
+        {
+          Serial.println("\nparsed json");
+          strcpy(mqtt_server, json["mqtt_server"]);
+          strcpy(mqtt_port, json["mqtt_port"]);
+          strcpy(mqtt_topic, json["mqtt_topic"]);
+        }
+        else
+        {
+          Serial.println("failed to load json config");
+        }
+        configFile.close();
+      }
+    }
+  }
+  else
+  {
+    Serial.println("failed to mount FS");
+  }
+
   WiFiManagerParameter custom_mqtt_server("server", "MQTT Server", mqtt_server, 40);
   WiFiManagerParameter custom_mqtt_port("port", "MQTT Port", mqtt_port, 6);
   WiFiManagerParameter custom_mqtt_topic("topic", "MQTT Topic", mqtt_topic, 32);
   WiFiManager wifiManager;
 
+  //wifiManager.resetSettings();
+
+  wifiManager.setSaveConfigCallback(saveConfigCallback);
   wifiManager.addParameter(&custom_mqtt_server);
   wifiManager.addParameter(&custom_mqtt_port);
   wifiManager.addParameter(&custom_mqtt_topic);
@@ -35,101 +92,85 @@ void setupWifi()
   strcpy(mqtt_port, custom_mqtt_port.getValue());
   strcpy(mqtt_topic, custom_mqtt_topic.getValue());
 
-  Serial.print("MQTT Broker: ");
+  // save config
+  if (shouldSaveConfig)
+  {
+    DynamicJsonDocument json(1024);
+    json["mqtt_server"] = mqtt_server;
+    json["mqtt_port"] = mqtt_port;
+    json["mqtt_topic"] = mqtt_topic;
+    File configFile = SPIFFS.open("/config.json", "w");
+    if (!configFile)
+    {
+      Serial.println("failed to open config file for writing");
+    }
+    serializeJson(json, Serial);
+    serializeJson(json, configFile);
+    configFile.close();
+  }
+
+}
+
+void rfidCallback(char *action, char *data)
+{
+  if (action == "play")
+  {
+    String command = "{\"command\": \"play\", \"payload\": \"";
+    command.concat(data);
+    command.concat("\"}");
+    Serial.print("Send play command:");
+    Serial.println(command);
+    snprintf(msg, MSG_BUFFER_SIZE, command.c_str());
+    client.publish(mqtt_topic, msg);
+  }
+
+  if (action == "stop")
+  {
+    String command = "{\"command\": \"stop\"}";
+    Serial.println("Send stop command");
+    snprintf(msg, MSG_BUFFER_SIZE, command.c_str());
+    client.publish(mqtt_topic, msg);
+  }
+}
+
+void mqttCallback(char *topic, byte *payload, unsigned int length)
+{
+}
+
+void mqttConnect()
+{
+  Serial.print("MQTT Server: ");
   Serial.println(mqtt_server);
-}
+  Serial.print("MQTT Port: ");
+  Serial.println(mqtt_port);
+  Serial.print("MQTT Topic: ");
+  Serial.println(mqtt_topic);
 
-/**
-   Helper routine to dump a byte array as hex values to Serial.
-*/
-void printHex(byte *buffer, byte bufferSize)
-{
-  for (byte i = 0; i < bufferSize; i++)
+  // Loop until we're reconnected
+  while (!client.connected())
   {
-    Serial.print(buffer[i] < 0x10 ? " 0" : " ");
-    Serial.print(buffer[i], HEX);
-  }
-}
-/**
-   Helper routine to dump a byte array as dec values to Serial.
-*/
-void printDec(byte *buffer, byte bufferSize)
-{
-  for (byte i = 0; i < bufferSize; i++)
-  {
-    Serial.print(buffer[i] < 0x10 ? " 0" : " ");
-    Serial.print(buffer[i], DEC);
-  }
-}
-
-void sendPlayCommand(String value) {
-  Serial.println(value);
-}
-
-void readRFID()
-{ /* function readRFID */
-  ////Read RFID card
-  for (byte i = 0; i < 6; i++)
-  {
-    key.keyByte[i] = 0xFF;
-  }
-  // Look for new 1 cards
-  if (!rfid.PICC_IsNewCardPresent())
-    return;
-  // Verify if the NUID has been readed
-  if (!rfid.PICC_ReadCardSerial())
-    return;
-  // Store NUID into nuidPICC array
-  for (byte i = 0; i < 4; i++)
-  {
-    nuidPICC[i] = rfid.uid.uidByte[i];
-  }
-  Serial.print(F("RFID In dec: "));
-  printDec(rfid.uid.uidByte, rfid.uid.size);
-  Serial.println();
-  Serial.println();
-
-  // Read data from the block
-  Serial.print(F("Reading data from block "));
-  Serial.println(F(" ..."));
-  const int blockSize = 4;
-  const int blocks = 8;
-  String tagValue = "";
-
-  for (int block = 0; block < blocks; block++)
-  {
-    byte blockAddr = 7 + blockSize * block;
-    // Serial.print("Read Block:");
-    // Serial.println(blockAddr);
-
-    byte buffer[128];
-    byte size = sizeof(buffer);
-    MFRC522::StatusCode status = (MFRC522::StatusCode)rfid.MIFARE_Read(blockAddr, buffer, &size);
-    if (status != MFRC522::STATUS_OK)
+    Serial.print("Attempting MQTT connection...");
+    // Create a random client ID
+    String clientId = "ESP8266Client-";
+    clientId += String(random(0xffff), HEX);
+    // Attempt to connect
+    if (client.connect(clientId.c_str()))
     {
-      Serial.print(F("MIFARE_Read() failed: "));
-      Serial.println(rfid.GetStatusCodeName(status));
-
-      if (status == 7) // status code 7 means the crc_a didn't match
-      {
-        rfid.PCD_Reset();
-        rfid.PCD_Init();
-      }
-      return;
+      Serial.println("connected");
+      // Once connected, publish an announcement...
+      client.publish("outTopic", "hello world");
+      // ... and resubscribe
+      client.subscribe("inTopic");
     }
-
-    for (uint8_t i = 0; i < 16; i++)
+    else
     {
-      tagValue += (char)buffer[i];
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
     }
   }
-
-  tagValue.trim();
-
-  rfid.PICC_HaltA();
-  rfid.PCD_StopCrypto1();
-
-  sendPlayCommand(tagValue);
 }
 
 void setup()
@@ -137,14 +178,23 @@ void setup()
   Serial.begin(9600);
   setupWifi();
 
-  SPI.begin();
-  rfid.PCD_Reset();
-  rfid.PCD_Init();
-  Serial.print(F("Reader :"));
-  rfid.PCD_DumpVersionToSerial();
+  //
+  rfid = Rfid();
+  rfid.setup(rfidCallback);
+
+  // mqtt
+  uint16_t mqtt_port_uint16 = (uint16_t)strtol(mqtt_port, NULL, 10);
+  client.setServer(mqtt_server, mqtt_port_uint16);
+  client.setCallback(mqttCallback);
 }
 
 void loop()
 {
-  readRFID();
+  if (!client.connected())
+  {
+    mqttConnect();
+  }
+  client.loop();
+
+  rfid.loop();
 }
