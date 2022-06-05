@@ -111,9 +111,9 @@ void setupWifi()
 
 }
 
-void rfidCallback(char *action, char *data)
+void rfidCallback(byte action, char *data)
 {
-  if (action == "play")
+  if (action == Rfid::Action::PLAY)
   {
     String command = "{\"command\": \"play\", \"payload\": \"";
     command.concat(data);
@@ -124,7 +124,7 @@ void rfidCallback(char *action, char *data)
     client.publish(mqtt_topic, msg);
   }
 
-  if (action == "stop")
+  if (action == Rfid::Action::STOP)
   {
     String command = "{\"command\": \"stop\"}";
     Serial.println("Send stop command");

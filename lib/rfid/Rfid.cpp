@@ -116,7 +116,7 @@ void Rfid::readCard()
         // Action on card detection.
         Serial.println(F("Card found."));
         String data = readDataFromCard();
-        callback("play", strcpy(new char[data.length() + 1], data.c_str()));
+        callback(Action::PLAY, strcpy(new char[data.length() + 1], data.c_str()));
     }
     else if (locked && result != MFRC522::STATUS_OK)
     {
@@ -124,7 +124,7 @@ void Rfid::readCard()
         rfid.uid.size = 0;
         // Action on card removal.
         Serial.println(F("Card has been removed."));
-        callback("stop", "");
+        callback(Action::STOP, "");
     }
     else if (!locked && result != MFRC522::STATUS_OK)
     {

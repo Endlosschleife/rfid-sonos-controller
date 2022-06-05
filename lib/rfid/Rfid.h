@@ -4,7 +4,7 @@
 
 #define SS_PIN 5
 #define RST_PIN 0
-#define RFID_CALLBACK_SIGNATURE std::function<void(char *, char *)> callback
+#define RFID_CALLBACK_SIGNATURE std::function<void(byte, char *)> callback
 
 class Rfid
 {
@@ -20,6 +20,11 @@ private:
     void readCard();
 
 public:
+    enum Action : byte
+    {
+        PLAY,
+        STOP
+    };
     void setup(RFID_CALLBACK_SIGNATURE);
     void loop();
 };
