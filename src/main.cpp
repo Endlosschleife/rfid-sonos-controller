@@ -5,7 +5,10 @@
 #include <PubSubClient.h>
 #include <Rfid.h>
 #include <ArduinoJson.h>
-#include <stdlib.h>     /* strtol */
+#include <stdlib.h> /* strtol */
+#include <Led.h>>
+
+#define ONBOARD_LED 2
 
 char mqtt_server[40];
 char mqtt_port[6] = "1883";
@@ -18,6 +21,9 @@ char msg[MSG_BUFFER_SIZE];
 boolean shouldSaveConfig = false;
 
 Rfid rfid;
+TaskHandle_t Task1;
+
+Led led;
 
 // callback notifying us of the need to save config
 void saveConfigCallback()
@@ -76,7 +82,7 @@ void setupWifi()
   WiFiManagerParameter custom_mqtt_topic("topic", "MQTT Topic", mqtt_topic, 32);
   WiFiManager wifiManager;
 
-  //wifiManager.resetSettings();
+  // wifiManager.resetSettings();
 
   wifiManager.setSaveConfigCallback(saveConfigCallback);
   wifiManager.addParameter(&custom_mqtt_server);
@@ -108,7 +114,6 @@ void setupWifi()
     serializeJson(json, configFile);
     configFile.close();
   }
-
 }
 
 void rfidCallback(byte action, char *data)
@@ -173,6 +178,20 @@ void mqttConnect()
   }
 }
 
+void loop2(void *parameter)
+{
+  for (;;)
+  {
+    // delay(1000);
+    // digitalWrite(ONBOARD_LED, HIGH);
+    // delay(100);
+    // digitalWrite(ONBOARD_LED, LOW);
+
+    // vTaskDelay(2000);
+    led.blink();
+  }
+}
+
 void setup()
 {
   Serial.begin(9600);
@@ -182,10 +201,24 @@ void setup()
   rfid = Rfid();
   rfid.setup(rfidCallback);
 
+  // 
+  led = Led();
+
   // mqtt
   uint16_t mqtt_port_uint16 = (uint16_t)strtol(mqtt_port, NULL, 10);
   client.setServer(mqtt_server, mqtt_port_uint16);
   client.setCallback(mqttCallback);
+
+  // use second core for animations
+  xTaskCreatePinnedToCore(
+      loop2,
+      "Task_1",
+      1000,
+      NULL,
+      2, // priority of 0 is the lowest.
+      &Task1,
+      1 // use core 0. Core 1 is the default core
+  );
 }
 
 void loop()
